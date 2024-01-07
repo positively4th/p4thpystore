@@ -1,0 +1,9 @@
+*.pyc
+.pytest_cache
+
+contrib
+!contrib/Makefile
+
+
+.venv
+
