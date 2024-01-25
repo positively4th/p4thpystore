@@ -7,7 +7,8 @@ from contrib.pyas.src.pyas_v3 import Leaf
 from contrib.pyas.src.pyas_v3 import T
 from contrib.p4thpymap.src.async_map import map as p4thmap
 
-from src.store import Store
+from ..store import Store
+from .relationstore import RelationStore
 
 
 class CollectStore(Leaf):
@@ -15,7 +16,7 @@ class CollectStore(Leaf):
     class CollectStoreError(Store.StoreError):
         pass
 
-    prototypes = []
+    prototypes = [RelationStore]
 
     columnSpecs = {
         'collectKeyStoreesMap': {
@@ -49,11 +50,10 @@ class CollectStore(Leaf):
         for childrenKey, childStorees in self.collectKeyStoreesMap.items():
             for childStoree in childStorees:
                 childStoree.registerEventCallback(
-                    lambda *args, **kwargs: self.onStoreEvent(childrenKey, *args, **kwargs))
+                    lambda *args, **kwargs: self.relationOnStoreEvent(childStoree, *args, **kwargs))
 
-    def onStoreEvent(self, childrenKey, event: Store.Event, storee: Store):
-        itemId = self.itemIdFromChild(childrenKey, event['item'])
-        self.forgetItem(itemId)
+    def itemIdFromCollectedChild(self, relatedKey, relatedItem):
+        return self.getCollectKeyStoreeIdGetterMap()[relatedKey](relatedItem)
 
     @property
     def collectKeyStoreesMap(self):
@@ -113,15 +113,15 @@ class CollectStore(Leaf):
     async def process(self, queueItems, T=None):
 
         async def transform(item):
-            item = item if T is None else await T(item)
             for collectKey, collectStorees in self.collectKeyStoreesMap.items():
                 childrenIds = self.collectChildIds(collectKey, item)
                 if iscoroutine(childrenIds):
                     childrenIds = await childrenIds
+                self.updateForeignIdIdMap(self.itemId(item), childrenIds)
                 item[collectKey] = self.createChildrenGetter(
                     collectStorees, childrenIds
                 )
-            return item
+            return item if T is None else await T(item)
 
         queueItems = await super().process(queueItems, T=transform)
         return queueItems

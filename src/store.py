@@ -13,7 +13,8 @@ from contrib.pyas.src.pyas_v3 import T
 from contrib.pyas.src.pyas_v3 import As
 from contrib.p4thpymap.src.map import map as p4thmap
 from contrib.p4thpymap.src.async_map import map as async_p4thmap
-from src.queue.queueitem import QueueItem
+
+from .queue.queueitem import QueueItem
 from src.mixins.log import Log
 from src.mixins.contextlogger import ContextLogger
 
@@ -106,7 +107,8 @@ class Store():
         __ids = [As(QueueItem)(queueItem)['__id']
                  for queueItem in queueItems]
         rows = await self.select(__ids)
-
+        if not isinstance(rows, dict):
+            rows = R.group_by(lambda r: self.itemId(r))(rows)
         for queueItem in queueItems:
             qi__id = queueItem['__id']
             queueItemee = As(QueueItem)(queueItem)
@@ -121,7 +123,7 @@ class Store():
 
         def isDictWithId(item: any) -> bool:
             try:
-                self.idGetter(item)
+                self.itemId(item)
             except (TypeError, KeyError):
                 return False
             except Exception as e:
@@ -198,6 +200,7 @@ class Store():
         # if self.loadedMapLock.locked():
         #     raise Exception('cannot get, locked!')
         #     pass
+
         with self.loadedMapLock:
             return self['loadedMap'].pop(itemId, None)
 
@@ -208,12 +211,18 @@ class Store():
         with self.loadedMapLock:
             return itemId in self['loadedMap']
 
-    def forgetItem(self, itemId):
-        if self.loadedMapLock.locked():
-            raise Exception('cannot forget, locked!')
-            pass
+    def forgetItem(self, itemIds):
+        # if self.loadedMapLock.locked():
+        #     raise Exception('cannot forget, locked!')
+        #     pass
+
+        _itemIds = itemIds if isinstance(
+            itemIds, (list | tuple | set)) else [itemIds]
         with self.loadedMapLock:
-            return self['loadedMap'].pop(itemId, None)
+            for itemId in _itemIds:
+                self['loadedMap'].pop(itemId, None)
+        self.log('info', f'{self.informativeClassId()} dropped item {
+            ', '.join(_itemIds)}')
 
     @classmethod
     def debug(cls):
@@ -381,7 +390,7 @@ class Store():
             try:
                 f(event, self)
             except Exception as e:
-                print(e)
+                print(f'runEventCallbacks: {f}', e)
 
     async def loadNewTG(self, pendingIds):
         res = {}

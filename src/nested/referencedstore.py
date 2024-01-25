@@ -49,9 +49,9 @@ class ReferencedStore(Leaf):
     def onNew(cls, self):
         for relatedKey, relatedStoree in self['referencedKeyStoreeMap'].items():
             relatedStoree.registerEventCallback(
-                lambda *args, **kwargs: self.onStoreEvent(relatedKey, *args, **kwargs))
+                lambda *args, **kwargs: self.referncedOnStoreEvent(relatedKey, *args, **kwargs))
 
-    def onStoreEvent(self, relatedKey, event: Store.Event, storee: Store):
+    def referncedOnStoreEvent(self, relatedKey, event: Store.Event, storee: Store):
         itemId = self.itemIdFromChild(relatedKey, event['item'])
         self.forgetItem(itemId)
 
@@ -66,15 +66,15 @@ class ReferencedStore(Leaf):
     def referencedIdsGetterMap(self):
         return self['referencedIdsGetterMap']
 
-    async def relatedIds(self, relatedKey, item):
-        relatedIdsGetter = self.referencedIdsGetterMap[relatedKey]
-        ids = relatedIdsGetter(item, relatedKey)
+    async def referencedIds(self, relatedKey, item):
+        referencedIdsGetter = self.referencedIdsGetterMap[relatedKey]
+        ids = referencedIdsGetter(item, relatedKey)
         if iscoroutine(ids):
             ids = await ids
         return ids
 
     @classmethod
-    def createRelatedGetter(cls, storee, id) -> callable:
+    def createReferencedGetter(cls, storee, id) -> callable:
 
         async def helper():
             child = await storee.get(id)
@@ -83,7 +83,7 @@ class ReferencedStore(Leaf):
         return helper
 
     @p4thmap(isScalar=(0, 'isItem'), inputArgNr=1, jsonFallbackMap={dumps(None): None})
-    async def applyRelatedGetter(self, item):
+    async def applyReferencedGetter(self, item):
         if item is None:
             return None
         res = {
@@ -100,9 +100,9 @@ class ReferencedStore(Leaf):
         async def transform(item):
             item = item if T is None else await T(item)
             for relatedKey, relatedStoree in self['referencedKeyStoreeMap'].items():
-                relatedIds = await self.relatedIds(relatedKey, item)
-                item[relatedKey] = self.createRelatedGetter(
-                    relatedStoree, relatedIds)
+                referencedIds = await self.referencedIds(relatedKey, item)
+                item[relatedKey] = self.createReferencedGetter(
+                    relatedStoree, referencedIds)
 
             return item
 
@@ -111,7 +111,7 @@ class ReferencedStore(Leaf):
 
     async def get(self, *args, **kwargs) -> list[dict]:
         items = await super().get(*args, **kwargs)
-        return await self.applyRelatedGetter(items)
+        return await self.applyReferencedGetter(items)
 
     async def _saveOne(self, item: any):
         referencedKeyStoreeMap = self['referencedKeyStoreeMap']

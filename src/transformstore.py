@@ -1,14 +1,15 @@
 from inspect import iscoroutine
+from json import loads, dumps
 
 from contrib.pyas.src.pyas_v3 import Leaf
 from contrib.pyas.src.pyas_v3 import T
 
-from src.store import Store
+from .store import Store
 
 
 class TransformStore(Leaf):
 
-    class LinksManyStoreError(Store.StoreError):
+    class TransformStoreError(Store.StoreError):
         pass
 
     prototypes = []
@@ -19,6 +20,16 @@ class TransformStore(Leaf):
         },
 
     }
+
+    @classmethod
+    def createJSONTransformer(cls):
+
+        def T(value, item, self, inverse: bool):
+            if value is None:
+                return None
+            return dumps(value) if inverse else loads(value)
+
+        return T
 
     @classmethod
     def getTransformKeys(cls) -> []:
@@ -46,7 +57,6 @@ class TransformStore(Leaf):
     async def process(self, queueItems, T=None):
 
         async def transform(item):
-            item = item if T is None else await T(item)
             for key in self.transformKeys:
                 if key not in item:
                     continue
@@ -54,7 +64,7 @@ class TransformStore(Leaf):
                 if iscoroutine(value):
                     value = await value
                 item[key] = value
-            return item
+            return item if T is None else await T(item)
 
         return await super().process(queueItems, T=transform)
 

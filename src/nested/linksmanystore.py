@@ -5,7 +5,8 @@ from contrib.pyas.src.pyas_v3 import Leaf
 from contrib.pyas.src.pyas_v3 import T
 from contrib.p4thpymap.src.async_map import map as p4thmap
 
-from src.store import Store
+from ..store import Store
+from .relationstore import RelationStore
 
 
 class LinksManyStore(Leaf):
@@ -13,7 +14,7 @@ class LinksManyStore(Leaf):
     class LinksManyStoreError(Store.StoreError):
         pass
 
-    prototypes = []
+    prototypes = [RelationStore]
 
     columnSpecs = {
         'linksManyKeyStoreeMap': {
@@ -21,7 +22,7 @@ class LinksManyStore(Leaf):
         },
         'linksManyKeyIdGetterMap': {
             'transformer': T.fallback(lambda val, key, classee: val if key in classee.row else classee.getLinksManyKeyIdGetterMap()),
-        }
+        },
     }
 
     @classmethod
@@ -36,13 +37,9 @@ class LinksManyStore(Leaf):
 
     @staticmethod
     def onNew(cls, self):
-        for childrenKey, childStoree in self['linksManyKeyStoreeMap'].items():
+        for _, childStoree in self['linksManyKeyStoreeMap'].items():
             childStoree.registerEventCallback(
-                lambda *args, **kwargs: self.onStoreEvent(childrenKey, *args, **kwargs))
-
-    def onStoreEvent(self, childrenKey, event: Store.Event, storee: Store):
-        itemId = self.itemIdFromChild(childrenKey, event['item'])
-        self.forgetItem(itemId)
+                lambda *args, **kwargs: self.relationOnStoreEvent(childStoree, *args, **kwargs))
 
     @property
     def linksManyKeyIdGetterMap(self):
@@ -76,12 +73,12 @@ class LinksManyStore(Leaf):
     async def process(self, queueItems, T=None):
 
         async def transform(item):
-            item = item if T is None else await T(item)
             for key, childStoree in self['linksManyKeyStoreeMap'].items():
-                childId = item[key]
-                item[key] = self.createChildrenGetter(childStoree, childId)
+                childrenIds = item[key]
+                self.updateForeignIdIdMap(self.itemId(item), childrenIds)
+                item[key] = self.createChildrenGetter(childStoree, childrenIds)
 
-            return item
+            return item if T is None else await T(item)
 
         queueItems = await super().process(queueItems, T=transform)
         return queueItems

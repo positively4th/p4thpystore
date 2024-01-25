@@ -4,7 +4,7 @@ from contrib.pyas.src.pyas_v3 import Leaf
 from contrib.pyas.src.pyas_v3 import T
 from contrib.p4thpymap.src.async_map import map as p4thmap
 
-from src.store import Store
+from .relationstore import RelationStore
 
 
 class LinksOneStore(Leaf):
@@ -12,7 +12,7 @@ class LinksOneStore(Leaf):
     class LinksOneStoreError(Exception):
         pass
 
-    prototypes = []
+    prototypes = [RelationStore]
 
     columnSpecs = {
         'linksOneKeyStoreeMap': {
@@ -20,6 +20,12 @@ class LinksOneStore(Leaf):
         },
 
     }
+
+    @staticmethod
+    def onNew(cls, self):
+        for _, childStoree in self['linksOneKeyStoreeMap'].items():
+            childStoree.registerEventCallback(
+                lambda *args, **kwargs: self.relationOnStoreEvent(childStoree, *args, **kwargs))
 
     @classmethod
     def getLinksOneKeyStoreeMap():
@@ -50,12 +56,12 @@ class LinksOneStore(Leaf):
     async def process(self, queueItems, T=None):
 
         async def transform(item):
-            item = item if T is None else await T(item)
             for key, linkeeStoree in self['linksOneKeyStoreeMap'].items():
                 linkeeId = item[key]
+                self.updateForeignIdIdMap(self.itemId(item), [linkeeId])
                 item[key] = self.createLinkeeGetter(linkeeStoree, linkeeId)
 
-            return item
+            return item if T is None else await T(item)
 
         queueItems = await super().process(queueItems, T=transform)
         return queueItems
