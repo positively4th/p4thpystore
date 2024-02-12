@@ -5,19 +5,16 @@ from contrib.pyas.src.pyas_v3 import As
 
 from src.nested.collectstore import CollectStore
 from src.store import Store
-from test.teststorebase import TestStoreBase
+from test.storetesttools import StoreTestTools
+from test.dictstore import DictStore
 
 
-class TestCollectStore(TestStoreBase):
-
-    @classmethod
-    def sortById(cls, items: list | tuple | None) -> list | tuple | None:
-        if items is None:
-            return None
-
-        return R.sort_by(lambda i: i['id'], items)
+class TestCollectStore(unittest.IsolatedAsyncioTestCase):
 
     async def test_CRUD(self):
+
+        def srt(thing):
+            return StoreTestTools.keySort(thing)
 
         def storeeIdGetter(vehicle: any) -> Store:
             if vehicle['type'] == 'Bike':
@@ -28,17 +25,17 @@ class TestCollectStore(TestStoreBase):
 
             return None
 
-        listenerBikes, flusherBikes = TestCollectStore.createEventListenerAndFlusher()
-        bikeStoree = As(TestCollectStore.DictStore, Store,
+        listenerBikes, flusherBikes = StoreTestTools.createEventListenerAndFlusher()
+        bikeStoree = As(DictStore, Store,
                         *Store.prototypes)({'name': 'Bikes'})
         bikeStoree.registerEventCallback(listenerBikes)
 
-        listenerCars, flusherCars = TestCollectStore.createEventListenerAndFlusher()
-        carStoree = As(TestCollectStore.DictStore, Store,
+        listenerCars, flusherCars = StoreTestTools.createEventListenerAndFlusher()
+        carStoree = As(DictStore, Store,
                        *Store.prototypes)({'name': 'Cars'})
         carStoree.registerEventCallback(listenerCars)
 
-        collectStoree = As(CollectStore, TestStoreBase.DictStore, Store, *Store.prototypes)({
+        collectStoree = As(CollectStore, DictStore, Store, *Store.prototypes)({
             'collectKeyStoreesMap': {
                 'vehicles': [bikeStoree, carStoree],
             },
@@ -47,9 +44,9 @@ class TestCollectStore(TestStoreBase):
             },
             'collectIdsGetterMap': {
                 'vehicles': lambda item, *args, **kwargs: [
-                    item['id'] for item in carStoree.selectFromDB(whereIns={'parentId': [item['id']]})
+                    item['id'] for item in carStoree['dictDB'].query(whereIns={'parentId': [item['id']]})
                 ] + [
-                    item['id'] for item in bikeStoree.selectFromDB(whereIns={'parentId': [item['id']]})
+                    item['id'] for item in bikeStoree['dictDB'].query(whereIns={'parentId': [item['id']]})
                 ]
             },
         })
@@ -109,20 +106,20 @@ class TestCollectStore(TestStoreBase):
         self.assertEqual(expBike1, actChild)
 
         actItem = await collectStoree.get(expItem['id'])
-        self.assertEqual(expItem, actItem)
+        self.assertEqual(srt(expItem), srt(actItem))
 
         # Test add child in children store
         expBike2 = {'id': '_b2', 'parentId': '_pA',
                     'name': 'Bike 2', 'type': 'Bike'}
-        expItem['vehicles'] = self.sortById([expBike1, expBike2, expCar1])
+        expItem['vehicles'] = [expBike1, expBike2, expCar1]
         await bikeStoree.save(expBike2)
         actChild = await bikeStoree.get(expBike2['id'])
         self.assertEqual(expBike2, actChild)
         actItem = await collectStoree.get(expItem['id'])
-        actItem['vehicles'] = self.sortById(actItem['vehicles'])
+        actItem['vehicles'] = actItem['vehicles']
 
         # Test remove child in children store
-        expItem['vehicles'] = self.sortById([expBike2, expCar1])
+        expItem['vehicles'] = [expBike2, expCar1]
         actChild = await bikeStoree.delete(expBike1['id'])
         self.assertEqual(expBike1, actChild)
         actChild = await bikeStoree.get([expBike1['id']])
@@ -130,14 +127,14 @@ class TestCollectStore(TestStoreBase):
         self.assertEqual(None, actChild)
 
         actItem = await collectStoree.get(expItem['id'])
-        actItem['vehicles'] = self.sortById(actItem['vehicles'])
-        self.assertEqual(expItem, actItem)
+        # actItem['vehicles'] = self.sortById(actItem['vehicles'])
+        self.assertEqual(srt(expItem), srt(actItem))
 
         # Test delete
         actItem = await collectStoree.delete([expItem['id']])
         actItem = actItem[0] if len(actItem) == 1 else None
-        actItem['vehicles'] = self.sortById(actItem['vehicles'])
-        self.assertEqual(expItem, actItem)
+        actItem['vehicles'] = actItem['vehicles']
+        self.assertEqual(srt(expItem), srt(actItem))
         actItem = await collectStoree.get([expItem['id']])
         expItem = [None]
         self.assertEqual(expItem, actItem)

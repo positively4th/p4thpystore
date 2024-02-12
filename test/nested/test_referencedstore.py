@@ -4,19 +4,20 @@ from contrib.pyas.src.pyas_v3 import As
 
 from src.nested.referencedstore import ReferencedStore
 from src.store import Store
-from test.teststorebase import TestStoreBase
+from test.storetesttools import StoreTestTools
+from test.dictstore import DictStore
 
 
-class TestReferencedStore(TestStoreBase):
+class TestReferencedStore(unittest.IsolatedAsyncioTestCase):
 
     async def test_CRUD(self):
 
-        listenerChildren, flusherChildA = TestReferencedStore.createEventListenerAndFlusher()
-        childrenStoree = As(TestReferencedStore.DictStore, Store,
+        listenerChildren, flusherChildA = StoreTestTools.createEventListenerAndFlusher()
+        childrenStoree = As(DictStore, Store,
                             *Store.prototypes)({'name': 'ChildA'})
         childrenStoree.registerEventCallback(listenerChildren)
 
-        referencedStoree = As(ReferencedStore, TestStoreBase.DictStore, Store, *Store.prototypes)({
+        referencedStoree = As(ReferencedStore, DictStore, Store, *Store.prototypes)({
             'referencedKeyStoreeMap': {
                 'children': childrenStoree,
             },
@@ -25,7 +26,7 @@ class TestReferencedStore(TestStoreBase):
             },
             'referencedIdsGetterMap': {
                 'children': lambda item, *args, **kwargs: [
-                    item['id'] for item in childrenStoree.selectFromDB(whereIns={'parentId': [item['id']]})
+                    item['id'] for item in childrenStoree['dictDB'].query(whereIns={'parentId': [item['id']]})
                 ]
             },
         })

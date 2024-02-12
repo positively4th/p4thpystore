@@ -70,18 +70,20 @@ class LinksManyStore(Leaf):
         }
         return res
 
-    async def process(self, queueItems, T=None):
+    async def process(self, ids, T=None):
 
         async def transform(item):
             for key, childStoree in self['linksManyKeyStoreeMap'].items():
                 childrenIds = item[key]
-                self.updateForeignIdIdMap(self.itemId(item), childrenIds)
                 item[key] = self.createChildrenGetter(childStoree, childrenIds)
+                self.updateForeignIdIdMap(self.itemId(item), [
+                    childStoree['idGetter'](child) for child in await item[key]()
+                ])
 
             return item if T is None else await T(item)
 
-        queueItems = await super().process(queueItems, T=transform)
-        return queueItems
+        items = await super().process(ids, T=transform)
+        return items
 
     async def get(self, *args, **kwargs) -> list[dict]:
         items = await super().get(*args, **kwargs)
@@ -103,7 +105,7 @@ class LinksManyStore(Leaf):
             ),
             **savedItem
         }
-        self.forgetItem(self.itemId(item))
+        # self.forgetItem(self.itemId(item))
         return savedItem
 
     async def _deleteOne(self, itemId: any):

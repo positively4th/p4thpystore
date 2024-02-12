@@ -1,14 +1,16 @@
 import unittest
-from json import dumps, loads
-from math import pow
-from contrib.pyas.src.pyas_v3 import As
 from asyncio import sleep
+from math import pow
+
+from contrib.pyas.src.pyas_v3 import As
+
 from src.pipetransformstore import PipeTransformStore
 from src.store import Store
-from test.teststorebase import TestStoreBase
+from test.storetesttools import StoreTestTools
+from test.dictstore import DictStore
 
 
-class TestPipeTransformStore(TestStoreBase):
+class TestPipeTransformStore(unittest.IsolatedAsyncioTestCase):
 
     async def test_CRUD(self):
 
@@ -19,8 +21,8 @@ class TestPipeTransformStore(TestStoreBase):
                 res['num'] = int(pow(res['num'], 0.5 if inverse else 2))
             return res
 
-        listener, flusher = TestStoreBase.createEventListenerAndFlusher()
-        implodedStore = As(PipeTransformStore, TestStoreBase.DictStore, Store,
+        listener, flusher = StoreTestTools.createEventListenerAndFlusher()
+        implodedStore = As(PipeTransformStore, DictStore, Store,
                            *Store.prototypes)({
                                'pipeTransforms': [squareNum, PipeTransformStore.createExplodeTransformer('scalar', ['a', 'b'])]
                            })
@@ -32,6 +34,7 @@ class TestPipeTransformStore(TestStoreBase):
         self.assertEqual(expItem, act)
 
         # Test create
+        oldExpItem = expItem
         expItem = {
             'id': '_A',
             'name': 'A',
@@ -51,13 +54,14 @@ class TestPipeTransformStore(TestStoreBase):
         expEvent = {
             'type': Store.EventType.SAVE,
             'id': expItem['id'],
-            'item': expItem
+            'new': expItem,
+            'old': oldExpItem,
         }
         act = await implodedStore.save(expItem)
         self.assertEqual(expItem, act)
         act = await implodedStore.get(expItem['id'])
         self.assertEqual(expItem, act)
-        act = implodedStore.selectFromDB(whereIns={
+        act = implodedStore['dictDB'].query(whereIns={
             'id': [expItem['id']]
         })
         act = None if len(act) != 1 else act[0]
@@ -72,6 +76,7 @@ class TestPipeTransformStore(TestStoreBase):
         self.assertEqual(implodedStore, actStoree)
 
         # Test update
+        oldExpItem = expItem
         expItem = {
             'id': '_A',
             'name': 'A',
@@ -88,14 +93,18 @@ class TestPipeTransformStore(TestStoreBase):
                 'b': '2',
             }
         }
-        expEvent = {'type': Store.EventType.SAVE,
-                    'id': expItem['id'], 'item': expItem}
+        expEvent = {
+            'type': Store.EventType.SAVE,
+            'id': expItem['id'],
+            'new': expItem,
+            'old': oldExpItem,
+        }
         act = await implodedStore.save([expItem])
         act = None if len(act) != 1 else act[0]
         self.assertEqual(expItem, act)
         act = await implodedStore.get(expItem['id'])
         self.assertEqual(expItem, act)
-        act = implodedStore.selectFromDB(whereIns={
+        act = implodedStore['dictDB'].query(whereIns={
             'id': [expItem['id']]
         })
         act = None if len(act) != 1 else act[0]
@@ -110,9 +119,12 @@ class TestPipeTransformStore(TestStoreBase):
         self.assertEqual(implodedStore, actStoree)
 
         # Test delete
-        expEvent = {'type': Store.EventType.DELETE,
-                    'id': expItem['id'],
-                    'item': expItem}
+        expEvent = {
+            'type': Store.EventType.DELETE,
+            'id': expItem['id'],
+            'new': None,
+            'old': expItem,
+        }
 
         act = await implodedStore.delete({'key': expItem['id']})
         act = act['key'] if 'key' in act else None

@@ -53,7 +53,7 @@ class LinksOneStore(Leaf):
         }
         return res
 
-    async def process(self, queueItems, T=None):
+    async def process(self, ids, T=None):
 
         async def transform(item):
             for key, linkeeStoree in self['linksOneKeyStoreeMap'].items():
@@ -63,8 +63,8 @@ class LinksOneStore(Leaf):
 
             return item if T is None else await T(item)
 
-        queueItems = await super().process(queueItems, T=transform)
-        return queueItems
+        items = await super().process(ids, T=transform)
+        return items
 
     async def get(self, *args, **kwargs) -> list[dict]:
         items = await super().get(*args, **kwargs)
@@ -84,8 +84,4 @@ class LinksOneStore(Leaf):
             ),
             **savedItem
         }
-        self.forgetItem(self.itemId(item))
         return savedItem
-
-    async def _deleteOne(self, itemId: any):
-        return await super()._deleteOne(itemId)

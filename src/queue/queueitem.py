@@ -6,7 +6,7 @@ class QueueItem(Leaf):
     prototypes = []
 
     columnSpecs = {
-        '__id': {
+        '_sid': {
             'transformer': T.constantNotEmpty(),
         },
         'result': {

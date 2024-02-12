@@ -1,10 +1,8 @@
 from __future__ import annotations
-from dill import loads, dumps
 import ramda as R
 import asyncio
 import threading
 import logging
-import random
 from typing import *
 from enum import Enum
 
@@ -13,6 +11,7 @@ from contrib.pyas.src.pyas_v3 import T
 from contrib.pyas.src.pyas_v3 import As
 from contrib.p4thpymap.src.map import map as p4thmap
 from contrib.p4thpymap.src.async_map import map as async_p4thmap
+from contrib.p4thpymisc.src.misc import clone
 
 from .queue.queueitem import QueueItem
 from src.mixins.log import Log
@@ -31,7 +30,8 @@ class Store():
     Event: Dict = frozenset({
         'type': EventType,
         'id': str,
-        'item': any
+        'new': any,
+        'old': any
     })
 
     type Events = List[Event]
@@ -41,19 +41,11 @@ class Store():
     @staticmethod
     def makeShapeAgnostic(method):
 
-        def ensureUniq(items: list | tuple, id: str) -> any:
-            if len(items) == 0:
-                return None
-            if len(items) > 1:
-                raise Store.StoreError(f'''Id {id} is not unique.''')
-            return items[0]
-
-        async def helper(self, ids: str | int | float | tuple | list | dict, *args, **kwargs):
+        async def helper(self, ids: str | int | float | tuple | list | set | dict, *args, **kwargs):
 
             if isinstance(ids, str):
-                items = await method(self, [ids], *args, **kwargs)
-                items = items[ids] if ids in items else []
-                return ensureUniq(items, ids)
+                item = await method(self, [ids], *args, **kwargs)
+                return item[ids]
 
             if isinstance(ids, dict):
                 uniqIds = R.pipe(
@@ -63,13 +55,13 @@ class Store():
                 items = await method(self, uniqIds, *args, **kwargs)
 
                 res = {
-                    key: ensureUniq(items[id], id)
+                    key: items[id] if id in items else None
                     for key, id in ids.items()
                 }
                 return res
 
             items = await method(self, ids, *args, **kwargs)
-            return [ensureUniq(items[id] if id in items else [], id) for id in ids]
+            return ids.__class__([items[id] if id in items else None for id in ids])
 
         return helper
 
@@ -79,15 +71,15 @@ class Store():
         def argHelper(method: callable) -> callable:
 
             async def methodHelper(self, *args, **kwargs):
-                res = await method(self, *args, **kwargs)
-                self.runEventCallbacks(eventType, res)
-                return res
+                new, old = await method(self, *args, **kwargs)
+                self.runEventCallbacks(eventType, new, old)
+                return old if new is None else new
 
             return methodHelper
 
         return argHelper
 
-    async def select(self, ids: list | tuple) -> list:
+    async def select(self, ids: list) -> list:
         raise Store.StoreError('select Not implemented')
 
     async def _saveOne(self, item: any):
@@ -96,32 +88,46 @@ class Store():
     async def _deleteOne(self, item: any):
         raise Store.StoreError('_deleteOne Not implemented')
 
-    async def process(self, queueItems, T=None):
-
-        async def _T(row):
-            return row
-
-        if T is not None:
-            _T = T
-
-        __ids = [As(QueueItem)(queueItem)['__id']
-                 for queueItem in queueItems]
-        rows = await self.select(__ids)
-        if not isinstance(rows, dict):
-            rows = R.group_by(lambda r: self.itemId(r))(rows)
-        for queueItem in queueItems:
-            qi__id = queueItem['__id']
-            queueItemee = As(QueueItem)(queueItem)
-            queueItemee['result'] = [
-                await _T(self.cloneItem(row)) for row in rows[qi__id]
-            ] if qi__id in rows else []
-            self.log('info', 'item {} ready to be delivered'.format(qi__id))
-        return queueItems
+    @async_p4thmap(isScalar=(0, 'isItem'), inputArgNr=1)
+    async def transform(self, item, T=None) -> dict:
+        return await T(item) if T is not None else item
 
     @staticmethod
-    def createIsDictWithId(self: Store) -> bool:
+    def ensureUnique(items: list) -> any:
+        if len(items) != 1:
+            raise Store.StoreError(f'Multiple items with same id.')
+        return items[0]
+
+    async def process(self, ids, T=None):
+
+        idItemMap = {
+            id: None for id in ids
+        }
+
+        items = [
+            await self.transform(row, T)
+            for row in await self.select(ids)
+        ]
+        idItemMap.update(R.pipe(
+            R.group_by(
+                lambda item: self['idGetter'](item)
+            ),
+            R.map(self.ensureUnique)
+        )(items))
+
+        self.setItem(idItemMap)
+
+        return idItemMap
+
+    @staticmethod
+    def createIsDictWithId(self: Store, noneResult: bool | None = None) -> bool:
 
         def isDictWithId(item: any) -> bool:
+
+            if noneResult is not None:
+                if item is None:
+                    return noneResult
+
             try:
                 self.itemId(item)
             except (TypeError, KeyError):
@@ -174,7 +180,7 @@ class Store():
             'transformer': T.writableEmpty(lambda val, key, classee: classee.createKeyIdGetter()),
         },
         'isItemTester': {
-            'transformer': T.writableEmpty(lambda val, key, classee: classee.createIsDictWithId(classee))
+            'transformer': T.writableEmpty(lambda val, key, classee: classee.createIsDictWithId(classee, noneResult=True))
         },
     }
 
@@ -185,16 +191,23 @@ class Store():
         return self['isItemTester'](item)
 
     def isItemId(self, itemId) -> bool:
-        return not self.isItem(itemId) and isinstance(itemId, Hashable)
+        return isinstance(itemId, (str, int, float))
 
-    def setItem(self, id, item):
+    def setItem(self, item):
         # if self.loadedMapLock.locked():
         #     raise Exception('cannot set, locked!')
         #     pass
+
+        if isinstance(item, (list, tuple)):
+            item = R.pipe(
+                R.group_by(lambda item: self['idGetter'](item)),
+                R.map(lambda items: self.ensureUnique(items))
+            )(item)
+        if not isinstance(item, dict):
+            item = {self['idGetter'](item): item}
         with self.loadedMapLock:
-            res = self['loadedMap'].pop(id, None)
-            self['loadedMap'][id] = item
-        return res
+            self['loadedMap'].update(item)
+        return item
 
     def getItem(self, itemId):
         # if self.loadedMapLock.locked():
@@ -202,7 +215,9 @@ class Store():
         #     pass
 
         with self.loadedMapLock:
-            return self['loadedMap'].pop(itemId, None)
+            res = self.cloneItem(self['loadedMap'][itemId]) \
+                if itemId in self['loadedMap'] else None
+            return self.cloneItem(res)
 
     def itemExists(self, itemId):
         # if self.loadedMapLock.locked():
@@ -240,26 +255,26 @@ class Store():
         self.loadedMapLock = threading.Lock()
 
     @classmethod
-    def cloneItem(cls, item: any) -> any:
-        return loads(dumps(item))
+    def cloneItem(cls, item: any, sortComparator: callable | None = None) -> any:
+
+        return clone(item)
+
+    def deliveItems(self, idItemsMap):
+        for id, item in idItemsMap.items():
+            self.log('info',
+                     'item {} added to loaded map'.format(id))
+            with self.pendingMapLock:
+                if not id in self['pendingMap']:
+                    continue
+                qs = self['pendingMap'].pop(id)
+            for q in qs:
+                q.put_nowait({
+                    '_sid': id,
+                    'result': item
+                })
+                self.log('info', 'item {} delivered'.format(id))
 
     def start(self):
-
-        def deliverItems(queueItems):
-            for queueItem in queueItems:
-                queueItemee = As(QueueItem)(queueItem)
-                __id = queueItemee['__id']
-                self.setItem(__id, queueItem['result'])
-                # self['loadedMap'][__id] = queueItem['result']
-                self.log('info',
-                         'item {} added to loaded map'.format(__id))
-                with self.pendingMapLock:
-                    if not __id in self['pendingMap']:
-                        continue
-                    qs = self['pendingMap'].pop(__id)
-                for q in qs:
-                    q.put_nowait(queueItem)
-                    self.log('info', 'item {} delivered'.format(__id))
 
         async def helper(name):
 
@@ -279,12 +294,8 @@ class Store():
             async def waitForSeveral():
 
                 items = []
-                if self.__class__.__name__.find('EventStore_'):
-                    pass
                 while len(items) < self['batchSize']:
                     # try:
-                    if self.__class__.__name__.find('EventStore_'):
-                        pass
                     item = await retryGet(self['batchDelay'], retries=1)
                     if item is None:
                         if len(items) > 0:
@@ -301,14 +312,14 @@ class Store():
 
                 self.log('info', '{} is processing'.format(name))
                 try:
-                    queueItems = await ContextLogger.asLogged(
+                    idItemMap = await ContextLogger.asLogged(
                         self.process,
                         tag=f"{self.process.__name__}:{
                             self.informativeClassId()}",
-                        resultHandler=ContextLogger.countResultHandler)(items)
+                        resultHandler=ContextLogger.countResultHandler)([As(QueueItem)(item)['_sid'] for item in items])
                 except Exception as e:
-                    queueItems = [{**item, **{'result': e}} for item in items]
-                deliverItems(queueItems)
+                    idItemMap = {item['_sid']: e for item in items}
+                self.deliveItems(idItemMap)
 
         assert self.queueTask is None
 
@@ -322,55 +333,55 @@ class Store():
             return
         self.start()
 
-    async def waitFor(self, __id: str) -> list[dict]:
+    async def waitFor(self, _sid: str) -> list[dict]:
 
         with self.pendingMapLock:
-            qs = self['pendingMap'][__id] if __id in self['pendingMap'] else []
+            qs = self['pendingMap'][_sid] if _sid in self['pendingMap'] else []
             q = asyncio.Queue()
             qs.append(q)
-            self['pendingMap'][__id] = qs
+            self['pendingMap'][_sid] = qs
 
-        self.log('info', 'adding {} to queue.'.format(__id))
+        self.log('info', 'adding {} to queue.'.format(_sid))
         if len(qs) == 1:
             await self.producer.put({
-                '__id': __id,
+                '_sid': _sid,
             })
         return await q.get()
 
-    @makeShapeAgnostic
-    async def get(self, ids: tuple | list, forceLoad=False, **kwArgs) -> list[dict]:
+    async def getList(self, ids: list, **kwArgs) -> list[dict]:
 
         self.ensureOpen()
 
         pendingIds = []
         res = {}
         for id in ids:
-            if self.itemExists(id) and not forceLoad:
+            if self.itemExists(id):
                 res[id] = self.getItem(id)
             else:
                 pendingIds.append(id)
 
         res.update(await ContextLogger.asLogged(self.loadNewTG, resultHandler=ContextLogger.countResultHandler)(pendingIds))
         return res
-        r = random.randint(0, 3)
-        if r < 1:
-            res.update(await ContextLogger.asLogged(loadNewTG, resultHandler=ContextLogger.countResultHandler)(pendingIds))
-        elif r < 2:
-            res.update(await ContextLogger.asLogged(loadNewGather, resultHandler=ContextLogger.countResultHandler)(pendingIds))
-        else:
-            res.update(await ContextLogger.asLogged(loadNewAsCompleted, resultHandler=ContextLogger.countResultHandler)(pendingIds))
 
-        return res
+    @makeShapeAgnostic
+    async def get(self, *args, **kwargs):
+        return await self.getList(*args, **kwargs)
 
-    @makeEventEmitter(EventType.SAVE)
     @async_p4thmap(isScalar=(0, 'isItem'), inputArgNr=1)
-    async def save(self, *args, **kwargs):
-        return await self._saveOne(*args, **kwargs)
+    @makeEventEmitter(EventType.SAVE)
+    async def save(self, item, *args, **kwargs):
+        oldItem = self['idGetter'](item)
+        oldItem = await self.get(oldItem)
+        newItem = await self._saveOne(item, *args, **kwargs)
+        if oldItem is not None:
+            self.forgetItem(self['idGetter'](oldItem))
+        self.setItem([newItem])
+        return newItem, oldItem
 
-    @makeEventEmitter(EventType.DELETE)
     @async_p4thmap(isScalar=(0, 'isItemId'), inputArgNr=1)
-    async def delete(self, *args, **kwargs):
-        return await self._deleteOne(*args, **kwargs)
+    @makeEventEmitter(EventType.DELETE)
+    async def delete(self, itemId: str | float | int, *args, **kwargs):
+        return None, await self._deleteOne(itemId, *args, **kwargs)
 
     def registerEventCallback(self, f: Store.EventListener) -> str:
         self.idCtr += 1
@@ -380,11 +391,13 @@ class Store():
 
     # inputArgNr is used as argument for isItem.
     @p4thmap(isScalar=(0, 'isItem'), inputArgNr=2)
-    def runEventCallbacks(self, eventType: Store.EventType, item: dict) -> None:
+    def runEventCallbacks(self, eventType: Store.EventType, new: any | None, old: any) -> None:
+        id = self['idGetter'](old if new is None else new)
         event = {
             'type': eventType,
-            'id': self.itemId(item),
-            'item': item
+            'id': id,
+            'new': new,
+            'old': old
         }
         for id, f in self['eventCallbacks'].items():
             try:
@@ -396,8 +409,8 @@ class Store():
         res = {}
         tasks = []
         async with asyncio.TaskGroup() as taskGroup:
-            for __id in pendingIds:
-                tasks.append(taskGroup.create_task(self.waitFor(__id)))
+            for _sid in pendingIds:
+                tasks.append(taskGroup.create_task(self.waitFor(_sid)))
         es = []
         for qi in tasks:
             qi = qi.result()
@@ -405,41 +418,7 @@ class Store():
             if isinstance(r, Exception):
                 es.append(r)
             else:
-                res[qi['__id']] = r
+                res[qi['_sid']] = r
         for e in es:
             raise e
         return res
-
-    async def loadNewGather(self, pendingIds):
-        res = {}
-        try:
-            coros = (self.waitFor(__id) for __id in pendingIds)
-            cores = await asyncio.gather(
-                *coros, return_exceptions=True)
-        except Exception as e:
-            self.log('error', e)
-            raise e
-        es = []
-        for qi in cores:
-            r = qi['result']
-            if isinstance(r, Exception):
-                es.append(r)
-            else:
-                res[qi['__id']] = r
-        for e in es:
-            raise e
-        return res
-
-    async def loadNewAsCompleted(self, pendingIds):
-        res = {}
-        tasks = [asyncio.create_task(self.waitFor(
-            __id), name=__id) for __id in pendingIds]
-        try:
-            for task in asyncio.as_completed(tasks):
-                qi = await task
-                r = qi['result']
-                res[qi['__id']] = r
-            return res
-        except Exception as e:
-            print(e)
-            raise (e)

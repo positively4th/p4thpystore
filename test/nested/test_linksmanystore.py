@@ -1,23 +1,23 @@
 import unittest
-import ramda as R
 
 from contrib.pyas.src.pyas_v3 import As
 
 from src.nested.linksmanystore import LinksManyStore
 from src.store import Store
-from test.teststorebase import TestStoreBase
+from test.storetesttools import StoreTestTools
+from test.dictstore import DictStore
 
 
-class TestLinksManyStore(TestStoreBase):
+class TestLinksManyStore(unittest.IsolatedAsyncioTestCase):
 
     async def test_CRUD(self):
 
-        listenerChildA, flusherChildA = TestLinksManyStore.createEventListenerAndFlusher()
-        childStoree = As(TestLinksManyStore.DictStore, Store,
+        listenerChildA, flusherChildA = StoreTestTools.createEventListenerAndFlusher()
+        childStoree = As(DictStore, Store,
                          *Store.prototypes)({'name': 'ChildA'})
         childStoree.registerEventCallback(listenerChildA)
 
-        linksManyStoree = As(LinksManyStore, TestLinksManyStore.DictStore, Store, *Store.prototypes)({
+        linksManyStoree = As(LinksManyStore, DictStore, Store, *Store.prototypes)({
             'linksManyKeyStoreeMap': {
                 'children': childStoree,
             },

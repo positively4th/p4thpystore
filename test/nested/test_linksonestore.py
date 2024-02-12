@@ -4,24 +4,25 @@ from contrib.pyas.src.pyas_v3 import As
 
 from src.nested.linksonestore import LinksOneStore
 from src.store import Store
-from test.teststorebase import TestStoreBase
+from test.storetesttools import StoreTestTools
+from test.dictstore import DictStore
 
 
-class TestLinksOneStore(TestStoreBase):
+class TestLinksOneStore(unittest.IsolatedAsyncioTestCase):
 
     async def test_CRUD(self):
 
-        listenerChildA, flusherChildA = TestLinksOneStore.createEventListenerAndFlusher()
-        childAStoree = As(TestLinksOneStore.DictStore, Store,
+        listenerChildA, flusherChildA = StoreTestTools.createEventListenerAndFlusher()
+        childAStoree = As(DictStore, Store,
                           *Store.prototypes)({'name': 'ChildA'})
         childAStoree.registerEventCallback(listenerChildA)
 
-        listenerChildB, flusherChildB = TestLinksOneStore.createEventListenerAndFlusher()
-        childBStoree = As(TestLinksOneStore.DictStore, Store,
+        listenerChildB, flusherChildB = StoreTestTools.createEventListenerAndFlusher()
+        childBStoree = As(DictStore, Store,
                           *Store.prototypes)({'name': 'ChildB'})
         childBStoree.registerEventCallback(listenerChildB)
 
-        linksOneStoree = As(LinksOneStore, TestLinksOneStore.DictStore, Store, *Store.prototypes)({
+        linksOneStoree = As(LinksOneStore, DictStore, Store, *Store.prototypes)({
             'linksOneKeyStoreeMap': {
                 'childA': childAStoree,
                 'childB': childBStoree

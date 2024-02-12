@@ -32,7 +32,7 @@ class TransformStore(Leaf):
         return T
 
     @classmethod
-    def getTransformKeys(cls) -> []:
+    def getTransformKeys(cls) -> list:
         return []
 
     @classmethod
@@ -42,31 +42,23 @@ class TransformStore(Leaf):
             'getKeyTransformerMap not implemented.'
         )
 
-    @property
-    def keyTransformerMap(self):
-        return self['keyTransformerMap']
-
-    @property
-    def transformKeys(self):
-        return self.keyTransformerMap.keys()
-
-    def transform(self, key, item, inverse=False):
-        transformer = self.keyTransformerMap[key]
+    def transformApply(self, key, item, inverse=False):
+        transformer = self['keyTransformerMap'][key]
         return transformer(item[key], item, self, inverse=inverse)
 
-    async def process(self, queueItems, T=None):
+    async def process(self, ids, T=None):
 
         async def transform(item):
-            for key in self.transformKeys:
+            for key in self['keyTransformerMap']:
                 if key not in item:
                     continue
-                value = self.transform(key, item)
+                value = self.transformApply(key, item)
                 if iscoroutine(value):
                     value = await value
                 item[key] = value
             return item if T is None else await T(item)
 
-        return await super().process(queueItems, T=transform)
+        return await super().process(ids, T=transform)
 
     async def _saveOne(self, item: any):
         keyTransformerMap = self['keyTransformerMap']
@@ -75,17 +67,16 @@ class TransformStore(Leaf):
         for key, _ in keyTransformerMap.items():
             if key not in saveItem:
                 continue
-            saveItem[key] = self.transform(key, item, inverse=True)
+            saveItem[key] = self.transformApply(key, item, inverse=True)
             if iscoroutine(saveItem[key]):
                 saveItem[key] = await saveItem[key]
         savedItem = (await super()._saveOne(saveItem))
         for key, _ in keyTransformerMap.items():
             if key not in savedItem:
                 continue
-            savedItem[key] = self.transform(key, savedItem, inverse=False)
+            savedItem[key] = self.transformApply(key, savedItem, inverse=False)
             if iscoroutine(savedItem[key]):
                 savedItem[key] = await savedItem[key]
-        self.forgetItem(self.itemId(item))
         return savedItem
 
     async def _deleteOne(self, itemId: any):

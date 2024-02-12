@@ -5,10 +5,11 @@ from contrib.pyas.src.pyas_v3 import As
 
 from src.store import Store
 from src.mixins.contextlogger import ContextLogger
-from test.teststorebase import TestStoreBase
+from test.storetesttools import StoreTestTools
+from test.dictstore import DictStore
 
 
-class TestStore(TestStoreBase):
+class TestStore(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self):
         self.contextLogger = ContextLogger.setContextLogger(As(ContextLogger)({
@@ -22,78 +23,94 @@ class TestStore(TestStoreBase):
         return super().tearDown()
 
     async def test_CRUD(self):
-        listener, flusher = TestStore.createEventListenerAndFlusher()
-        storeA = As(TestStore.DictStore, Store,
-                    *Store.prototypes)({'name': 'ChildA'})
-        storeA.registerEventCallback(listener)
 
-        # Test missing
-        exp = None
-        act = await storeA.get('A')
-        self.assertEqual(exp, act)
+        async def wrapper(shapeShifter: callable = lambda x: x, msg: str = None):
 
-        # Test create
-        exp = {
-            'id': '_A',
-            'name': 'A',
-            'num': 1,
-        }
-        expEvent = {
-            'type': Store.EventType.SAVE,
-            'id': exp['id'],
-            'item': exp
-        }
-        await storeA.save(exp)
-        act = await storeA.get(exp['id'])
-        self.assertEqual(exp, act)
+            ss = shapeShifter
+            msg = shapeShifter.__name__ if msg is None else msg
+            listener, flusher = StoreTestTools.createEventListenerAndFlusher()
+            storeA = As(DictStore)({'name': 'ChildA'})
+            storeA.registerEventCallback(listener)
 
-        eventStoreePair = flusher()
-        self.assertEqual(1, len(eventStoreePair))
-        eventStoreePair = eventStoreePair[0]
-        actEvent = eventStoreePair[0]
-        actStoree = eventStoreePair[1]
-        self.assertEqual(expEvent, actEvent)
-        self.assertEqual(storeA, actStoree)
+            # Test missing
+            exp = None
+            act = await storeA.get(ss('A'))
+            self.assertEqual(ss(exp), act)
 
-        # Test update
-        exp = {
-            'id': '_A',
-            'name': 'A',
-            'num': 2,
-        }
-        expEvent = {'type': Store.EventType.SAVE, 'id': exp['id'], 'item': exp}
-        await storeA.save([exp])
-        act = act[0] if len(exp) == 1 else None
-        act = await storeA.get(exp['id'])
-        self.assertEqual(exp, act)
+            # Test create
+            oldExp = None
+            exp = {
+                'id': '_A',
+                'name': 'A',
+                'num': 1,
+            }
+            expEvent = {
+                'type': Store.EventType.SAVE,
+                'id': exp['id'],
+                'new': exp,
+                'old': oldExp,
+            }
+            act = await storeA.save(ss(exp))
+            self.assertEqual(ss(exp), act)
+            act = await storeA.get(ss(exp['id']))
+            self.assertEqual(ss(exp), act)
 
-        eventStoreePair = flusher()
-        self.assertEqual(1, len(eventStoreePair))
-        eventStoreePair = eventStoreePair[0]
-        actEvent = eventStoreePair[0]
-        actStoree = eventStoreePair[1]
-        self.assertEqual(expEvent, actEvent)
-        self.assertEqual(storeA, actStoree)
+            eventStoreePair = flusher()
+            self.assertEqual(1, len(eventStoreePair))
+            eventStoreePair = eventStoreePair[0]
+            actEvent = eventStoreePair[0]
+            actStoree = eventStoreePair[1]
+            self.assertEqual(expEvent, actEvent)
+            self.assertEqual(storeA, actStoree)
 
-        # Test delete
-        expEvent = {'type': Store.EventType.DELETE,
-                    'id': exp['id'],
-                    'item': exp}
+            # Test update
+            oldExp = {**exp}
+            exp = {
+                'id': '_A',
+                'name': 'A',
+                'num': 2,
+            }
+            expEvent = {'type': Store.EventType.SAVE,
+                        'id': exp['id'], 'new': exp, 'old': oldExp}
+            act = await storeA.save(ss(exp))
+            self.assertEqual(ss(exp), act)
+            act = await storeA.get(ss(exp['id']))
+            self.assertEqual(ss(exp), act)
+            eventStoreePair = flusher()
+            self.assertEqual(1, len(eventStoreePair))
+            eventStoreePair = eventStoreePair[0]
+            actEvent = eventStoreePair[0]
+            actStoree = eventStoreePair[1]
+            self.assertEqual(expEvent, actEvent)
+            self.assertEqual(storeA, actStoree)
 
-        act = await storeA.delete({'key': exp['id']})
-        act = act['key'] if 'key' in act else None
-        self.assertEqual(exp, act)
-        act = await storeA.get(exp['id'])
-        exp = None
-        self.assertEqual(exp, act)
+            # Test delete scalar
+            oldExp = {**exp}
+            expEvent = {'type': Store.EventType.DELETE,
+                        'id': exp['id'],
+                        'new': None,
+                        'old': oldExp
+                        }
 
-        eventStoreePair = flusher()
-        self.assertEqual(1, len(eventStoreePair))
-        eventStoreePair = eventStoreePair[0]
-        actEvent = eventStoreePair[0]
-        actStoree = eventStoreePair[1]
-        self.assertEqual(expEvent, actEvent)
-        self.assertEqual(storeA, actStoree)
+            act = await storeA.delete(ss(exp['id']))
+            self.assertEqual(ss(exp), act)
+            act = await storeA.get(ss(exp['id']))
+            exp = None
+            self.assertEqual(ss(exp), act)
+
+            eventStoreePair = flusher()
+            self.assertEqual(1, len(eventStoreePair))
+            eventStoreePair = eventStoreePair[0]
+            actEvent = eventStoreePair[0]
+            actStoree = eventStoreePair[1]
+            self.assertEqual(expEvent, actEvent)
+            self.assertEqual(storeA, actStoree)
+
+        await wrapper(lambda x: x, 'ssScalar')
+        await wrapper(lambda x: [x], 'ssList')
+        await wrapper(lambda x: tuple([x]), 'ssTuple')
+        # await wrapper(lambda x: set([x]), 'ssSet')
+        await wrapper(lambda x: {'key': x}, 'ssDict')
 
 
 if __name__ == '__main__':

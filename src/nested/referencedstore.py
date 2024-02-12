@@ -7,7 +7,8 @@ from contrib.pyas.src.pyas_v3 import Leaf
 from contrib.pyas.src.pyas_v3 import T
 from contrib.p4thpymap.src.async_map import map as p4thmap
 
-from src.store import Store
+from ..store import Store
+from .relationstore import RelationStore
 
 
 class ReferencedStore(Leaf):
@@ -15,7 +16,7 @@ class ReferencedStore(Leaf):
     class ReferencedStoreError(Store.StoreError):
         pass
 
-    prototypes = []
+    prototypes = [RelationStore]
 
     columnSpecs = {
         'referencedKeyStoreeMap': {
@@ -52,8 +53,13 @@ class ReferencedStore(Leaf):
                 lambda *args, **kwargs: self.referncedOnStoreEvent(relatedKey, *args, **kwargs))
 
     def referncedOnStoreEvent(self, relatedKey, event: Store.Event, storee: Store):
-        itemId = self.itemIdFromChild(relatedKey, event['item'])
-        self.forgetItem(itemId)
+        if event['type'] == Store.EventType.SAVE:
+            itemId = self.itemIdFromChild(relatedKey, event['new'])
+            self.forgetItem(itemId)
+
+        if event['type'] == Store.EventType.DELETE:
+            itemId = self.itemIdFromChild(relatedKey, event['old'])
+            self.forgetItem(itemId)
 
     @property
     def referencedKeyIdGetterMap(self):

@@ -1,5 +1,4 @@
 from inspect import iscoroutine
-from json import loads, dumps
 
 from contrib.pyas.src.pyas_v3 import Leaf
 from contrib.pyas.src.pyas_v3 import T
@@ -70,21 +69,20 @@ class PipeTransformStore(Leaf):
                 item = await item
         return item
 
-    async def process(self, queueItems, T=None):
+    async def process(self, ids, T=None):
 
         async def transform(item):
             item = await self.pipeTransform(item)
             return item if T is None else await T(item)
 
-        return await super().process(queueItems, T=transform)
+        return await super().process(ids, T=transform)
 
     async def _saveOne(self, item: any):
         saveItem = await self.pipeTransform(item, inverse=True)
-        # if iscoroutine(saveItem):
-        #    saveItem = await saveItem
         savedItem = (await super()._saveOne(saveItem))
         savedItem = await self.pipeTransform(savedItem)
-        self.forgetItem(self.itemId(item))
+        self.forgetItem(self['idGetter'](item))
+        self.setItem(item)
         return savedItem
 
     async def _deleteOne(self, itemId: any):
